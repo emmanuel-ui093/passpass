@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 interface Props {
@@ -14,16 +14,59 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
   const [venue, setVenue] = useState('');
   const [date, setDate] = useState('');
   const [category, setCategory] = useState('Campus');
-  const [banner, setBanner] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Image Upload State
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   if (!isOpen) return null;
+
+  // Helper: Convert file to Base64 Data URL for instant rendering & storage
+  const processFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImagePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const removeImage = () => {
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
-    // Direct initialization using environment variables
     const supabase = createSupabaseClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -32,7 +75,12 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
     // Parse price value
     const numericPrice = parseFloat(price.replace(/[^0-9.]/g, '')) || 0;
 
-    // Send new event directly to Supabase
+    // Use uploaded image or fallback default
+    const finalBanner =
+      imagePreview ||
+      'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=800&q=80';
+
+    // Send new event to Supabase
     const { error } = await supabase.from('events').insert([
       {
         title,
@@ -40,10 +88,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
         location: venue,
         date: date || 'Upcoming',
         category,
-        banner:
-          banner.trim() !== ''
-            ? banner
-            : 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=800&q=80',
+        banner: finalBanner,
       },
     ]);
 
@@ -59,10 +104,10 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
       setPrice('');
       setVenue('');
       setDate('');
-      setBanner('');
+      setImagePreview(null);
       onClose();
 
-      // Refresh to pull the newly inserted row from Supabase
+      // Refresh to pull newly inserted event from Supabase
       window.location.reload();
     }
   };
@@ -81,6 +126,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
+          {/* Event Title */}
           <div>
             <label className="text-xs text-slate-400 font-bold">
               Event Title
@@ -95,6 +141,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             />
           </div>
 
+          {/* Category */}
           <div>
             <label className="text-xs text-slate-400 font-bold">Category</label>
             <select
@@ -109,22 +156,77 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             </select>
           </div>
 
+          {/* Drag & Drop / Camera / Photo Library Picker */}
           <div>
-            <label className="text-xs text-slate-400 font-bold">
-              Banner Picture URL
+            <label className="text-xs text-slate-400 font-bold block mb-1">
+              Banner Picture
             </label>
-            <input
-              type="url"
-              placeholder="https://images.unsplash.com/photo-..."
-              value={banner}
-              onChange={(e) => setBanner(e.target.value)}
-              className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              Paste an image web URL (leave blank for default event picture)
-            </p>
+
+            {!imagePreview ? (
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-2 ${
+                  isDragging
+                    ? 'border-indigo-500 bg-indigo-500/10'
+                    : 'border-slate-800 bg-slate-950 hover:border-slate-700'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-indigo-400 text-lg">
+                  📷
+                </div>
+                <div className="text-xs text-slate-300 font-semibold">
+                  Drag & drop photo here, or{' '}
+                  <span className="text-indigo-400 underline">click to choose</span>
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  Select from Gallery or snap a photo with Camera
+                </p>
+              </div>
+            ) : (
+              <div className="relative rounded-2xl overflow-hidden border border-slate-800 group h-36">
+                <img
+                  src={imagePreview}
+                  alt="Banner Preview"
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-slate-950/70 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-bold hover:bg-slate-700"
+                  >
+                    Change Photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={removeImage}
+                    className="px-3 py-1.5 bg-rose-600/80 text-white rounded-lg text-xs font-bold hover:bg-rose-600"
+                  >
+                    Remove
+                  </button>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+              </div>
+            )}
           </div>
 
+          {/* Price */}
           <div>
             <label className="text-xs text-slate-400 font-bold">
               Ticket Price (₦)
@@ -139,6 +241,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             />
           </div>
 
+          {/* Venue */}
           <div>
             <label className="text-xs text-slate-400 font-bold">
               Venue & City
@@ -153,6 +256,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             />
           </div>
 
+          {/* Date & Time */}
           <div>
             <label className="text-xs text-slate-400 font-bold">
               Date & Time
