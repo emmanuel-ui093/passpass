@@ -8,14 +8,24 @@ interface Props {
   onClose: () => void;
 }
 
+interface TicketTierInput {
+  name: string;
+  price: string;
+  quantity: string;
+}
+
 export default function CreateTicketModal({ isOpen, onClose }: Props) {
   const [title, setTitle] = useState('');
-  const [price, setPrice] = useState('');
   const [venue, setVenue] = useState('');
   const [date, setDate] = useState('');
   const [category, setCategory] = useState('Campus');
-  const [ticketCapacity, setTicketCapacity] = useState('500');
   const [loading, setLoading] = useState(false);
+
+  // Dynamic Ticket Tiers State (Default starts with Early Bird & Regular)
+  const [ticketTiers, setTicketTiers] = useState<TicketTierInput[]>([
+    { name: 'Early Bird', price: '2000', quantity: '100' },
+    { name: 'Regular Pass', price: '3500', quantity: '300' },
+  ]);
 
   // Image Upload State
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -24,7 +34,35 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
 
   if (!isOpen) return null;
 
-  // Helper: Convert file to Base64 Data URL for instant rendering & storage
+  // Add a new tier input row
+  const handleAddTier = () => {
+    setTicketTiers([
+      ...ticketTiers,
+      { name: 'VIP Pass', price: '7500', quantity: '50' },
+    ]);
+  };
+
+  // Remove a tier input row
+  const handleRemoveTier = (index: number) => {
+    if (ticketTiers.length <= 1) {
+      alert('Your event must have at least one ticket tier.');
+      return;
+    }
+    setTicketTiers(ticketTiers.filter((_, i) => i !== index));
+  };
+
+  // Update specific field in a tier row
+  const handleTierChange = (
+    index: number,
+    field: keyof TicketTierInput,
+    value: string
+  ) => {
+    const updated = [...ticketTiers];
+    updated[index][field] = value;
+    setTicketTiers(updated);
+  };
+
+  // Helper: Convert file to Base64
   const processFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
       alert('Please select an image file.');
@@ -73,22 +111,24 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
-    // Parse numeric values
-    const numericPrice = parseFloat(price.replace(/[^0-9.]/g, '')) || 0;
-    const totalCapacity = parseInt(ticketCapacity.replace(/[^0-9]/g, ''), 10) || 500;
+    // Primary display price on event card (use lowest tier price)
+    const basePrice = Math.min(
+      ...ticketTiers.map(
+        (t) => parseFloat(t.price.replace(/[^0-9.]/g, '')) || 0
+      )
+    );
 
-    // Use uploaded image or fallback default
     const finalBanner =
       imagePreview ||
       'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=800&q=80';
 
-    // 1. Create main Event record in Supabase and return the created object
+    // 1. Insert Event into Supabase
     const { data: newEvent, error: eventError } = await supabase
       .from('events')
       .insert([
         {
           title,
-          price: numericPrice,
+          price: basePrice,
           location: venue,
           date: date || 'Upcoming',
           category,
@@ -99,48 +139,48 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
       .single();
 
     if (eventError) {
-      console.error('Supabase Insert Error:', eventError);
+      console.error('Supabase Event Error:', eventError);
       alert(`Error publishing event: ${eventError.message}`);
       setLoading(false);
       return;
     }
 
-    // 2. Automatically seed corresponding ticket category into ticket_types table
+    // 2. Batch insert all custom ticket tiers into ticket_types
     if (newEvent) {
-      const { error: tierError } = await supabase.from('ticket_types').insert([
-        {
-          event_id: newEvent.id,
-          name: 'Regular Pass',
-          price: numericPrice,
-          quantity: totalCapacity,
-          sold: 0,
-        },
-      ]);
+      const tiersToInsert = ticketTiers.map((tier) => ({
+        event_id: newEvent.id,
+        name: tier.name.trim() || 'General Admission',
+        price: parseFloat(tier.price.replace(/[^0-9.]/g, '')) || 0,
+        quantity: parseInt(tier.quantity.replace(/[^0-9]/g, ''), 10) || 100,
+        sold: 0,
+      }));
+
+      const { error: tierError } = await supabase
+        .from('ticket_types')
+        .insert(tiersToInsert);
 
       if (tierError) {
-        console.error('Ticket Type Insert Error:', tierError);
+        console.error('Ticket Tier Insert Error:', tierError);
+        alert(`Warning: Event created, but tiers failed: ${tierError.message}`);
       }
     }
 
     setLoading(false);
-    alert('Event published successfully!');
+    alert('Event and ticket categories published successfully!');
 
-    // Clear form state
+    // Reset Form
     setTitle('');
-    setPrice('');
     setVenue('');
     setDate('');
-    setTicketCapacity('500');
     setImagePreview(null);
     onClose();
 
-    // Refresh page to load newly created event from Supabase
     window.location.reload();
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl p-6 space-y-4 text-white shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl p-6 space-y-4 text-white shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center border-b border-slate-800 pb-3">
           <h2 className="text-lg font-black">Host New Event 🔥</h2>
           <button
@@ -151,7 +191,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form onSubmit={handleSubmit} className="space-y-4">
           {/* Event Title */}
           <div>
             <label className="text-xs text-slate-400 font-bold">
@@ -182,12 +222,11 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             </select>
           </div>
 
-          {/* Drag & Drop / Camera / Photo Library Picker */}
+          {/* Banner Upload */}
           <div>
             <label className="text-xs text-slate-400 font-bold block mb-1">
               Banner Picture
             </label>
-
             {!imagePreview ? (
               <div
                 onDragOver={handleDragOver}
@@ -211,78 +250,118 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
                   📷
                 </div>
                 <div className="text-xs text-slate-300 font-semibold">
-                  Drag & drop photo here, or{' '}
-                  <span className="text-indigo-400 underline">click to choose</span>
+                  Drag & drop photo, or{' '}
+                  <span className="text-indigo-400 underline">browse</span>
                 </div>
-                <p className="text-[10px] text-slate-500">
-                  Select from Gallery or snap a photo with Camera
-                </p>
               </div>
             ) : (
-              <div className="relative rounded-2xl overflow-hidden border border-slate-800 group h-36">
+              <div className="relative rounded-2xl overflow-hidden border border-slate-800 h-32">
                 <img
                   src={imagePreview}
-                  alt="Banner Preview"
+                  alt="Preview"
                   className="w-full h-full object-cover"
                 />
-                <div className="absolute inset-0 bg-slate-950/70 flex items-center justify-center gap-2">
+                <div className="absolute inset-0 bg-slate-950/60 flex items-center justify-center gap-2">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-3 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-bold hover:bg-slate-700"
+                    className="px-3 py-1 bg-slate-800 text-white rounded-lg text-xs font-bold"
                   >
-                    Change Photo
+                    Change
                   </button>
                   <button
                     type="button"
                     onClick={removeImage}
-                    className="px-3 py-1.5 bg-rose-600/80 text-white rounded-lg text-xs font-bold hover:bg-rose-600"
+                    className="px-3 py-1 bg-rose-600 text-white rounded-lg text-xs font-bold"
                   >
                     Remove
                   </button>
                 </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
               </div>
             )}
           </div>
 
-          {/* Price & Capacity Grid */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-slate-400 font-bold">
-                Pass Price (₦)
+          {/* DYNAMIC TICKET CATEGORIES / TIERS SECTION */}
+          <div className="border-t border-b border-slate-800 py-3 space-y-3">
+            <div className="flex justify-between items-center">
+              <label className="text-xs text-indigo-400 font-black uppercase tracking-wider">
+                Ticket Categories & Pricing
               </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. 3400 or 0"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+              <button
+                type="button"
+                onClick={handleAddTier}
+                className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-2.5 py-1 rounded-lg transition"
+              >
+                + Add Category
+              </button>
             </div>
-            <div>
-              <label className="text-xs text-slate-400 font-bold">
-                Max Quantity
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. 500"
-                value={ticketCapacity}
-                onChange={(e) => setTicketCapacity(e.target.value)}
-                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+
+            <div className="space-y-2.5">
+              {ticketTiers.map((tier, index) => (
+                <div
+                  key={index}
+                  className="bg-slate-950 p-3 rounded-2xl border border-slate-800 space-y-2"
+                >
+                  <div className="flex justify-between items-center gap-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Category (e.g. VIP, Early Bird)"
+                      value={tier.name}
+                      onChange={(e) =>
+                        handleTierChange(index, 'name', e.target.value)
+                      }
+                      className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 flex-1"
+                    />
+                    {ticketTiers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTier(index)}
+                        className="text-slate-500 hover:text-rose-400 text-xs font-bold px-2"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold block mb-0.5">
+                        Price (₦)
+                      </span>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Price (0 for Free)"
+                        value={tier.price}
+                        onChange={(e) =>
+                          handleTierChange(index, 'price', e.target.value)
+                        }
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold block mb-0.5">
+                        Quantity
+                      </span>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Max available"
+                        value={tier.quantity}
+                        onChange={(e) =>
+                          handleTierChange(index, 'quantity', e.target.value)
+                        }
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Venue */}
+          {/* Venue & Location */}
           <div>
             <label className="text-xs text-slate-400 font-bold">
               Venue & City
@@ -314,12 +393,12 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 mt-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 font-bold text-xs rounded-xl transition shadow-lg shadow-indigo-600/30 text-white"
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 font-bold text-xs rounded-xl transition shadow-lg shadow-indigo-600/30 text-white"
           >
-            {loading ? 'Publishing Event...' : 'Publish Event Pass'}
+            {loading ? 'Publishing Event...' : 'Publish Event & Categories'}
           </button>
         </form>
       </div>
     </div>
   );
-}
+}ssss
