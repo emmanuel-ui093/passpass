@@ -14,6 +14,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
   const [venue, setVenue] = useState('');
   const [date, setDate] = useState('');
   const [category, setCategory] = useState('Campus');
+  const [ticketCapacity, setTicketCapacity] = useState('500');
   const [loading, setLoading] = useState(false);
 
   // Image Upload State
@@ -72,44 +73,69 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
-    // Parse price value
+    // Parse numeric values
     const numericPrice = parseFloat(price.replace(/[^0-9.]/g, '')) || 0;
+    const totalCapacity = parseInt(ticketCapacity.replace(/[^0-9]/g, ''), 10) || 500;
 
     // Use uploaded image or fallback default
     const finalBanner =
       imagePreview ||
       'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=800&q=80';
 
-    // Send new event to Supabase
-    const { error } = await supabase.from('events').insert([
-      {
-        title,
-        price: numericPrice,
-        location: venue,
-        date: date || 'Upcoming',
-        category,
-        banner: finalBanner,
-      },
-    ]);
+    // 1. Create main Event record in Supabase and return the created object
+    const { data: newEvent, error: eventError } = await supabase
+      .from('events')
+      .insert([
+        {
+          title,
+          price: numericPrice,
+          location: venue,
+          date: date || 'Upcoming',
+          category,
+          banner: finalBanner,
+        },
+      ])
+      .select()
+      .single();
+
+    if (eventError) {
+      console.error('Supabase Insert Error:', eventError);
+      alert(`Error publishing event: ${eventError.message}`);
+      setLoading(false);
+      return;
+    }
+
+    // 2. Automatically seed corresponding ticket category into ticket_types table
+    if (newEvent) {
+      const { error: tierError } = await supabase.from('ticket_types').insert([
+        {
+          event_id: newEvent.id,
+          name: 'Regular Pass',
+          price: numericPrice,
+          quantity: totalCapacity,
+          sold: 0,
+        },
+      ]);
+
+      if (tierError) {
+        console.error('Ticket Type Insert Error:', tierError);
+      }
+    }
 
     setLoading(false);
+    alert('Event published successfully!');
 
-    if (error) {
-      console.error('Supabase Insert Error:', error);
-      alert(`Error publishing event: ${error.message}`);
-    } else {
-      alert('Event published successfully!');
-      // Clear form
-      setTitle('');
-      setPrice('');
-      setVenue('');
-      setDate('');
-      setImagePreview(null);
-      onClose();
+    // Clear form state
+    setTitle('');
+    setPrice('');
+    setVenue('');
+    setDate('');
+    setTicketCapacity('500');
+    setImagePreview(null);
+    onClose();
 
-      // Refresh to pull newly inserted event from Supabase
-      window.location.reload();
-    }
+    // Refresh page to load newly created event from Supabase
+    window.location.reload();
   };
 
   return (
@@ -226,19 +252,34 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             )}
           </div>
 
-          {/* Price */}
-          <div>
-            <label className="text-xs text-slate-400 font-bold">
-              Ticket Price (₦)
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. 2000 or 0 for Free"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+          {/* Price & Capacity Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-slate-400 font-bold">
+                Pass Price (₦)
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. 3400 or 0"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 font-bold">
+                Max Quantity
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. 500"
+                value={ticketCapacity}
+                onChange={(e) => setTicketCapacity(e.target.value)}
+                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
           </div>
 
           {/* Venue */}
@@ -263,7 +304,7 @@ export default function CreateTicketModal({ isOpen, onClose }: Props) {
             </label>
             <input
               type="text"
-              placeholder="e.g. Fri, Oct 10 • 8:00 PM"
+              placeholder="e.g. Fri, Oct 24 • 8:00 PM"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
