@@ -46,12 +46,19 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
   // Load Paystack Inline script dynamically if not present
   const loadPaystackScript = (): Promise<boolean> => {
     return new Promise((resolve) => {
-      if (window.PaystackPop) {
+      // v2 exposes PaystackPop as a constructor; v1 does not
+      if (typeof window.PaystackPop === 'function') {
         resolve(true);
         return;
       }
+      // Remove any old v1 script/object so v2 can load cleanly
+      document
+        .querySelectorAll('script[src*="js.paystack.co/v1"]')
+        .forEach((s) => s.remove());
+      if (window.PaystackPop) delete window.PaystackPop;
+
       const script = document.createElement('script');
-      script.src = 'https://js.paystack.co/v1/inline.js';
+      script.src = 'https://js.paystack.co/v2/inline.js';
       script.onload = () => resolve(true);
       script.onerror = () => resolve(false);
       document.body.appendChild(script);
