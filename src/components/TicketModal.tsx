@@ -22,6 +22,12 @@ declare global {
   }
 }
 
+// Create the client once, outside the component
+const supabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export default function TicketModal({ event, onClose }: TicketModalProps) {
   const [quantity, setQuantity] = useState(1);
   const [fullName, setFullName] = useState('');
@@ -57,10 +63,15 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
     setLoading(true);
 
     try {
-      const supabase = createSupabaseClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-      );
+      // Check the Paystack key first so a missing key gives a clear message
+      const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_KEY;
+      if (totalPrice > 0 && !paystackKey) {
+        alert(
+          'Paystack public key is missing in this deployment. Add NEXT_PUBLIC_PAYSTACK_KEY in Vercel and redeploy.'
+        );
+        setLoading(false);
+        return;
+      }
 
       // 1. Create a PENDING order record in Supabase
       const { data: order, error: orderError } = await supabase
@@ -86,7 +97,6 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
 
       // Handle Free Tickets directly without Paystack
       if (totalPrice === 0) {
-        // Direct call to fulfill order via backend or function
         window.location.href = `/my-tickets`;
         return;
       }
@@ -102,9 +112,9 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
       // 3. Trigger Paystack Inline Popup
       const paystack = new window.PaystackPop();
       paystack.newTransaction({
-        key: process.env.NEXT_PUBLIC_PAYSTACK_KEY,
+        key: paystackKey,
         email: email,
-        amount: totalPrice * 100, // Paystack expects amount in Kobo
+        amount: Math.round(totalPrice * 100), // Paystack expects amount in kobo
         currency: 'NGN',
         metadata: {
           order_id: order.id,
@@ -116,29 +126,40 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
           ],
         },
         onSuccess: async (transaction: { reference: string }) => {
-          // 4. Verify payment with your backend route
-          const verifyRes = await fetch('/api/billing/paystack/verify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reference: transaction.reference }),
-          });
+          try {
+            // 4. Verify payment with your backend route
+            const verifyRes = await fetch('/api/paystack/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reference: transaction.reference }),
+            });
 
-          const verifyData = await verifyRes.json();
+            const verifyData = await verifyRes.json();
 
-          if (verifyData.success) {
-            window.location.href = `/my-tickets`;
-          } else {
-            alert(`Payment verification failed: ${verifyData.error}`);
+            if (verifyData.success) {
+              window.location.href = `/my-tickets`;
+            } else {
+              alert(`Payment verification failed: ${verifyData.error}`);
+              setLoading(false);
+            }
+          } catch (verifyErr: any) {
+            console.error('Verify error:', verifyErr);
+            alert(
+              `Payment went through but verification failed: ${verifyErr?.message || 'Unknown error'}. Reference: ${transaction.reference}`
+            );
             setLoading(false);
           }
+        },
+        onCancel: () => {
+          setLoading(false);
         },
         onClose: () => {
           setLoading(false);
         },
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Checkout error:', err);
-      alert('An unexpected error occurred during checkout.');
+      alert(`Checkout error: ${err?.message || 'Unknown error'}`);
       setLoading(false);
     }
   };
@@ -246,7 +267,11 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
               disabled={loading}
               className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 font-bold text-xs rounded-xl transition shadow-lg shadow-indigo-600/30 text-white"
             >
-              {loading ? 'Initializing Paystack...' : totalPrice === 0 ? 'Claim Free Pass' : 'Proceed to Pay'}
+              {loading
+                ? 'Initializing Paystack...'
+                : totalPrice === 0
+                ? 'Claim Free Pass'
+                : 'Proceed to Pay'}
             </button>
           </div>
         </form>
