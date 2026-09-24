@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 interface TicketModalProps {
   event: {
@@ -23,22 +24,55 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
   const [loading, setLoading] = useState(false);
 
   // Parse numeric price from event
-  const basePrice = typeof event.price === 'number' 
-    ? event.price 
-    : parseFloat(String(event.price).replace(/[^0-9.]/g, '')) || 0;
+  const basePrice =
+    typeof event.price === 'number'
+      ? event.price
+      : parseFloat(String(event.price).replace(/[^0-9.]/g, '')) || 0;
 
   const totalPrice = basePrice * quantity;
+
+  const generateTicketCode = () => {
+    const randomHex = Math.random().toString(36).substring(2, 8).toUpperCase();
+    return `PASS-${randomHex}`;
+  };
 
   const handlePurchase = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
-    // Simulated payment processing (e.g., Paystack integration point)
-    setTimeout(() => {
+    const supabase = createSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+
+    const code = generateTicketCode();
+
+    // 1. Save ticket details to Supabase database
+    const { error: ticketError } = await supabase.from('tickets').insert([
+      {
+        ticket_code: code,
+        event_id: event.id,
+        buyer_name: fullName,
+        buyer_email: email || null,
+        buyer_phone: phone,
+        quantity,
+        total_price: totalPrice,
+        status: 'VALID',
+      },
+    ]);
+
+    if (ticketError) {
+      console.error('Ticket Generation Error:', ticketError);
+      alert(`Could not process ticket: ${ticketError.message}`);
       setLoading(false);
-      alert(`Success! Ticket for ${event.title} sent to ${email || phone}.`);
-      onClose();
-    }, 1500);
+      return;
+    }
+
+    setLoading(false);
+
+    // 2. Redirect straight to the ticket pass page
+    // (If you placed your folder in myticket, change this to `/myticket/${code}`)
+    window.location.href = `/ticket/${code}`;
   };
 
   return (
@@ -46,17 +80,26 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
       <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl p-6 space-y-4 text-white shadow-2xl">
         <div className="flex justify-between items-center border-b border-slate-800 pb-3">
           <div>
-            <h2 className="text-base font-black truncate max-w-[280px]">{event.title}</h2>
+            <h2 className="text-base font-black truncate max-w-[280px]">
+              {event.title}
+            </h2>
             <p className="text-xs text-indigo-400 font-bold">{event.date}</p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white font-bold p-1">✕</button>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-white font-bold p-1"
+          >
+            ✕
+          </button>
         </div>
 
         <form onSubmit={handlePurchase} className="space-y-4">
-          {/* Dynamic Ticket Price Tier Display */}
+          {/* Ticket Price Display */}
           <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between">
             <div>
-              <p className="text-xs font-bold text-white">General Admission Pass</p>
+              <p className="text-xs font-bold text-white">
+                General Admission Pass
+              </p>
               <p className="text-[10px] text-slate-400">Single Entry Ticket</p>
             </div>
             <div className="text-right">
@@ -77,7 +120,9 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
               >
                 -
               </button>
-              <span className="text-sm font-bold w-4 text-center">{quantity}</span>
+              <span className="text-sm font-bold w-4 text-center">
+                {quantity}
+              </span>
               <button
                 type="button"
                 onClick={() => setQuantity(quantity + 1)}
@@ -91,7 +136,9 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
           {/* Buyer Details */}
           <div className="space-y-2">
             <div>
-              <label className="text-[11px] text-slate-400 font-bold">Full Name</label>
+              <label className="text-[11px] text-slate-400 font-bold">
+                Full Name
+              </label>
               <input
                 type="text"
                 required
@@ -103,7 +150,9 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
             </div>
 
             <div>
-              <label className="text-[11px] text-slate-400 font-bold">WhatsApp / Phone Number</label>
+              <label className="text-[11px] text-slate-400 font-bold">
+                WhatsApp / Phone Number
+              </label>
               <input
                 type="tel"
                 required
@@ -115,7 +164,9 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
             </div>
 
             <div>
-              <label className="text-[11px] text-slate-400 font-bold">Email (Optional)</label>
+              <label className="text-[11px] text-slate-400 font-bold">
+                Email (Optional)
+              </label>
               <input
                 type="email"
                 placeholder="you@example.com"
@@ -129,7 +180,9 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
           {/* Total & Submit Button */}
           <div className="pt-2">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-xs text-slate-400 font-bold">Total Amount:</span>
+              <span className="text-xs text-slate-400 font-bold">
+                Total Amount:
+              </span>
               <span className="text-base font-black text-indigo-400">
                 {totalPrice === 0 ? 'FREE' : `₦${totalPrice.toLocaleString()}`}
               </span>
@@ -140,7 +193,11 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
               disabled={loading}
               className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 font-bold text-xs rounded-xl transition shadow-lg shadow-indigo-600/30 text-white"
             >
-              {loading ? 'Processing Pass...' : totalPrice === 0 ? 'Claim Free Pass' : 'Proceed to Pay'}
+              {loading
+                ? 'Generating Pass...'
+                : totalPrice === 0
+                ? 'Claim Free Pass'
+                : 'Get Pass'}
             </button>
           </div>
         </form>
