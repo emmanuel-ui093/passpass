@@ -74,7 +74,7 @@ export async function POST(req: Request) {
     }
 
     // Already fulfilled (retry, or webhook got there first): treat as success
-    if (order.status === 'PAID') {
+    if (order.status === 'SUCCESS') {
       return NextResponse.json({
         success: true,
         message: 'Order already fulfilled',
