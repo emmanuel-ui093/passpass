@@ -1,10 +1,10 @@
 'use client'
 
 import { Suspense, useState } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
-// Wrap hooks accessing search params in a suspended sub-component
 function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -47,23 +47,30 @@ function LoginForm() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
+          placeholder="you@example.com"
           className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
         />
       </div>
       <div>
-        <label className="block text-xs text-slate-400 mb-1">Password</label>
+        <div className="flex justify-between items-center mb-1">
+          <label className="block text-xs text-slate-400">Password</label>
+          <Link href="/forgot-password" className="text-xs text-indigo-400 hover:underline">
+            Forgot password?
+          </Link>
+        </div>
         <input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
+          placeholder="••••••••"
           className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
         />
       </div>
       <button
         type="submit"
         disabled={loading}
-        className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 text-white font-bold py-3 rounded-xl transition-all text-sm"
+        className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 text-white font-bold py-3 rounded-xl transition-all text-sm mt-2"
       >
         {loading ? 'Signing in...' : 'Sign In'}
       </button>
@@ -77,11 +84,17 @@ export default function LoginPage() {
       <div className="max-w-md w-full bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl">
         <h1 className="text-2xl font-bold mb-2 text-indigo-400">Welcome Back</h1>
         <p className="text-xs text-slate-400 mb-6">Sign in to your account</p>
-        
-        {/* Suspense boundary prevents prerender errors at build time */}
+
         <Suspense fallback={<div className="text-xs text-slate-500 text-center py-4">Loading form...</div>}>
           <LoginForm />
         </Suspense>
+
+        <p className="text-xs text-slate-500 text-center mt-6">
+          Don't have an account?{' '}
+          <Link href="/signup" className="text-indigo-400 hover:underline">
+            Sign up
+          </Link>
+        </p>
       </div>
     </div>
   )
