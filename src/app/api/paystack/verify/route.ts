@@ -129,6 +129,63 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Failed to process ticket fulfillment' }, { status: 500 });
     }
 
+    // 6. Email the ticket link so the buyer can find it again later.
+    // Never let an email problem fail the purchase — log and move on.
+    try {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
+      const ticketUrl = `${appUrl}/my-tickets?orderId=${order.id}`;
+      const resendKey = process.env.RESEND_API_KEY;
+
+      if (resendKey) {
+        const { data: buyer } = await supabaseAdmin
+          .from('orders')
+          .select('buyer_email, buyer_name')
+          .eq('id', order.id)
+          .maybeSingle();
+
+        if (buyer?.buyer_email) {
+          const emailRes = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${resendKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: process.env.RESEND_FROM_EMAIL || 'PassPass <onboarding@resend.dev>',
+              to: buyer.buyer_email,
+              subject: 'Your PassPass ticket is ready',
+              html: `
+                <div style="font-family:sans-serif;max-width:480px;margin:auto">
+                  <h2>You're in, ${buyer.buyer_name || 'there'}! 🎟️</h2>
+                  <p>Your payment was confirmed and your ticket is ready.</p>
+                  <p>
+                    <a href="${ticketUrl}"
+                       style="display:inline-block;background:#4f46e5;color:#fff;
+                              padding:12px 20px;border-radius:10px;text-decoration:none;
+                              font-weight:bold">
+                      View my ticket
+                    </a>
+                  </p>
+                  <p style="color:#888;font-size:12px">
+                    Save this email — you'll need this link to find your ticket again.<br/>
+                    Reference: ${reference}
+                  </p>
+                </div>
+              `,
+            }),
+          });
+
+          if (!emailRes.ok) {
+            console.error('[Ticket Email Error]:', await emailRes.text());
+          }
+        }
+      } else {
+        console.warn('[Ticket Email] RESEND_API_KEY not set, skipping email.');
+      }
+    } catch (emailErr) {
+      console.error('[Ticket Email Exception]:', emailErr);
+    }
+
     return NextResponse.json({
       success: true,
       message: 'Order fulfilled successfully',
