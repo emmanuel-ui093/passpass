@@ -104,7 +104,7 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
 
       // Handle Free Tickets directly without Paystack
       if (totalPrice === 0) {
-        window.location.href = `/my-tickets`;
+        window.location.href = `/my-tickets?orderId=${order.id}`;
         return;
       }
 
@@ -144,7 +144,7 @@ export default function TicketModal({ event, onClose }: TicketModalProps) {
             const verifyData = await verifyRes.json();
 
             if (verifyData.success) {
-              window.location.href = `/my-tickets`;
+              window.location.href = `/my-tickets?orderId=${order.id}`;
             } else {
               alert(`Payment verification failed: ${verifyData.error}`);
               setLoading(false);
