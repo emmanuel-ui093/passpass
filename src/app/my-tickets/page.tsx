@@ -2,6 +2,8 @@
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 
+export const dynamic = 'force-dynamic';
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -9,125 +11,157 @@ const supabase = createClient(
 
 interface PageProps {
   searchParams: Promise<{ orderId?: string }> | { orderId?: string };
-  params?: Promise<{ orderId?: string }> | { orderId?: string };
+}
+
+function NoticeCard({ title, message }: { title: string; message: string }) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 text-center">
+      <h1 className="text-2xl font-bold mb-2">{title}</h1>
+      <p className="text-slate-400 mb-6">{message}</p>
+      <Link href="/" className="bg-indigo-600 px-6 py-2 rounded-xl text-sm font-bold">
+        Back to Events
+      </Link>
+    </div>
+  );
 }
 
 export default async function MyTicketsPage(props: PageProps) {
   const searchParams = await props.searchParams;
-  const params = await props.params;
-  const orderId = searchParams?.orderId || params?.orderId;
+  const orderId = searchParams?.orderId;
 
   if (!orderId) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 text-center">
-        <h1 className="text-2xl font-bold mb-2">No Ticket Selected</h1>
-        <p className="text-slate-400 mb-6">Please provide a valid order ID to view your ticket pass.</p>
-        <Link href="/" className="bg-indigo-600 px-6 py-2 rounded-xl text-sm font-bold">
-          Back to Events
-        </Link>
-      </div>
+      <NoticeCard
+        title="No Ticket Selected"
+        message="Please provide a valid order ID to view your ticket pass."
+      />
     );
   }
 
-  // Fetch order, event details, and ticket records
-  const { data: order, error } = await supabase
+  // 1. Load the order
+  const { data: order, error: orderError } = await supabase
     .from('orders')
-    .select(`
-      id,
-      quantity,
-      total_amount,
-      user_email,
-      payment_reference,
-      events ( title, venue, event_date, banner_url ),
-      ticket_types ( name ),
-      tickets ( id, qr_code_id, status )
-    `)
+    .select('id, event_id, buyer_name, buyer_email, buyer_phone, total_amount, status, paystack_reference')
     .eq('id', orderId)
-    .single();
+    .maybeSingle();
 
-  if (error || !order) {
+  if (orderError || !order) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 text-center">
-        <h1 className="text-2xl font-bold mb-2">Ticket Pass Not Found</h1>
-        <p className="text-slate-400 mb-6">We couldn't retrieve this order. Please check your link or contact support.</p>
-        <Link href="/" className="bg-indigo-600 px-6 py-2 rounded-xl text-sm font-bold">
-          Back to Events
-        </Link>
-      </div>
+      <NoticeCard
+        title="Ticket Pass Not Found"
+        message="We couldn't retrieve this order. Please check your link or contact support."
+      />
     );
   }
 
-  // Safely extract single objects from Supabase relational arrays
-  const event = Array.isArray(order.events) ? order.events[0] : order.events;
-  const ticketType = Array.isArray(order.ticket_types) ? order.ticket_types[0] : order.ticket_types;
-  const primaryTicket = Array.isArray(order.tickets) ? order.tickets[0] : order.tickets;
+  if (order.status !== 'SUCCESS') {
+    return (
+      <NoticeCard
+        title="Payment Not Confirmed"
+        message="This order hasn't been marked as paid yet. If you just paid, refresh this page in a few seconds."
+      />
+    );
+  }
 
-  const qrApiUrl = primaryTicket?.qr_code_id
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${primaryTicket.qr_code_id}`
-    : '';
+  // 2. Load the event
+  const { data: event } = await supabase
+    .from('events')
+    .select('title, venue, location, city, date, banner')
+    .eq('id', order.event_id)
+    .maybeSingle();
+
+  // 3. Load every ticket issued for this order (quantity > 1 means several rows)
+  const { data: tickets } = await supabase
+    .from('tickets')
+    .select('id, qr_code, checked_in_at')
+    .eq('order_id', order.id)
+    .order('id', { ascending: true });
+
+  const ticketList = tickets ?? [];
+
+  if (ticketList.length === 0) {
+    return (
+      <NoticeCard
+        title="Tickets Still Processing"
+        message="Your payment was confirmed but your tickets haven't been issued yet. Refresh in a moment, or contact support with your reference below."
+      />
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-4 sm:p-6 gap-6">
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
         {/* Banner */}
-        {event?.banner_url ? (
-          <img src={event.banner_url} alt={event.title || 'Event'} className="w-full h-40 object-cover" />
+        {event?.banner ? (
+          <img src={event.banner} alt={event?.title || 'Event'} className="w-full h-40 object-cover" />
         ) : (
           <div className="w-full h-40 bg-gradient-to-r from-indigo-900 to-slate-900 flex items-center justify-center p-4">
             <span className="text-indigo-200 font-bold text-center text-lg">{event?.title || 'PassPass Event'}</span>
           </div>
         )}
 
-        {/* Ticket Details */}
         <div className="p-6 space-y-6">
           <div>
             <span className="inline-block px-3 py-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 text-xs font-semibold rounded-full mb-2">
-              {ticketType?.name || 'Standard Pass'} ({order.quantity}x)
+              General Admission ({ticketList.length}x)
             </span>
             <h1 className="text-2xl font-extrabold text-white">{event?.title || 'Event Pass'}</h1>
-            <p className="text-slate-400 text-sm mt-1">📍 {event?.venue || 'Venue TBA'}</p>
-            <p className="text-slate-400 text-sm">
-              📅 {event?.event_date ? new Date(event.event_date).toLocaleDateString('en-NG', { dateStyle: 'full' }) : 'Date TBA'}
+            <p className="text-slate-400 text-sm mt-1">
+              📍 {event?.venue || event?.location || 'Venue TBA'}
+              {event?.city ? ` • ${event.city}` : ''}
             </p>
-          </div>
-
-          {/* QR Code Pass Box */}
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 flex flex-col items-center text-center shadow-inner">
-            <p className="text-xs text-slate-400 font-medium mb-4 uppercase tracking-wider">Scan at Entrance</p>
-            {qrApiUrl ? (
-              <div className="bg-white p-3 rounded-xl border border-slate-700">
-                <img src={qrApiUrl} alt="Entry QR Code" className="w-48 h-48" />
-              </div>
-            ) : (
-              <div className="text-slate-500 text-sm">No QR code available</div>
-            )}
-            {primaryTicket?.qr_code_id && (
-              <p className="text-xs font-mono text-slate-500 mt-4 break-all">
-                ID: {primaryTicket.qr_code_id}
-              </p>
-            )}
+            <p className="text-slate-400 text-sm">📅 {event?.date || 'Date TBA'}</p>
           </div>
 
           {/* Attendee Info */}
           <div className="border-t border-slate-800 pt-4 text-xs text-slate-400 space-y-1">
             <div className="flex justify-between">
-              <span>Attendee Email:</span>
-              <span className="text-slate-200 font-medium">{order.user_email}</span>
+              <span>Attendee:</span>
+              <span className="text-slate-200 font-medium">{order.buyer_name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Email:</span>
+              <span className="text-slate-200 font-medium">{order.buyer_email}</span>
             </div>
             <div className="flex justify-between">
               <span>Ref:</span>
-              <span className="text-slate-200 font-mono">{order.payment_reference}</span>
+              <span className="text-slate-200 font-mono break-all text-right">{order.paystack_reference}</span>
             </div>
           </div>
         </div>
-
-        {/* Footer actions */}
-        <div className="bg-slate-950/50 p-4 border-t border-slate-800 text-center">
-          <Link href="/" className="text-xs text-indigo-400 hover:text-indigo-300 font-bold">
-            ← Find More Events
-          </Link>
-        </div>
       </div>
+
+      {/* One QR pass card per ticket, since each one is a separate admission */}
+      {ticketList.map((ticket, i) => {
+        const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
+          ticket.qr_code
+        )}`;
+        return (
+          <div
+            key={ticket.id}
+            className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col items-center text-center"
+          >
+            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">
+              Pass {i + 1} of {ticketList.length}
+            </p>
+            <p className="text-xs mb-4">
+              {ticket.checked_in_at ? (
+                <span className="text-amber-400 font-bold">Already checked in</span>
+              ) : (
+                <span className="text-emerald-400 font-bold">Not yet used</span>
+              )}
+            </p>
+            <div className="bg-white p-3 rounded-xl border border-slate-700">
+              <img src={qrApiUrl} alt={`Entry QR code ${i + 1}`} className="w-48 h-48" />
+            </div>
+            <p className="text-xs font-mono text-slate-500 mt-4 break-all">ID: {ticket.qr_code}</p>
+          </div>
+        );
+      })}
+
+      <Link href="/" className="text-xs text-indigo-400 hover:text-indigo-300 font-bold">
+        ← Find More Events
+      </Link>
     </div>
   );
 }
