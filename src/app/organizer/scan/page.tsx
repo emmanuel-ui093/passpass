@@ -1,12 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import Link from 'next/link';
+import { createClient } from '@/lib/supabase/client';
 
 type ResultStatus = 'success' | 'already_used' | 'invalid' | 'wrong_event' | 'error';
 
@@ -23,10 +19,10 @@ interface EventRow {
 }
 
 const RESULT_STYLES: Record<ResultStatus, { bg: string; icon: string; title: string }> = {
-  success: { bg: 'bg-emerald-600', icon: '✓', title: 'VALID' },
+  success: { bg: 'bg-emerald-600', icon: '\u2713', title: 'VALID' },
   already_used: { bg: 'bg-amber-500', icon: '!', title: 'ALREADY USED' },
-  invalid: { bg: 'bg-red-600', icon: '✕', title: 'INVALID' },
-  wrong_event: { bg: 'bg-red-600', icon: '✕', title: 'WRONG EVENT' },
+  invalid: { bg: 'bg-red-600', icon: '\u2715', title: 'INVALID' },
+  wrong_event: { bg: 'bg-red-600', icon: '\u2715', title: 'WRONG EVENT' },
   error: { bg: 'bg-slate-700', icon: '!', title: 'ERROR' },
 };
 
@@ -34,9 +30,8 @@ const RESULT_VISIBLE_MS = 2500;
 const DUPLICATE_WINDOW_MS = 4000;
 
 export default function ScanPage() {
-  const [passcode, setPasscode] = useState('');
-  const [unlocked, setUnlocked] = useState(false);
-  const [gateError, setGateError] = useState('');
+  const [loadingEvents, setLoadingEvents] = useState(true);
+  const [notLoggedIn, setNotLoggedIn] = useState(false);
 
   const [events, setEvents] = useState<EventRow[]>([]);
   const [eventId, setEventId] = useState('');
@@ -54,44 +49,37 @@ export default function ScanPage() {
   const lastScanRef = useRef<{ code: string; at: number } | null>(null);
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventIdRef = useRef('');
-  const passcodeRef = useRef('');
 
   useEffect(() => {
     eventIdRef.current = eventId;
   }, [eventId]);
 
+  // Load only THIS organizer's own events — real login, not a shared passcode
   useEffect(() => {
-    passcodeRef.current = passcode;
-  }, [passcode]);
+    const supabase = createClient();
 
-  // Restore session passcode
-  useEffect(() => {
-    const saved = sessionStorage.getItem('checkin_passcode');
-    if (saved) {
-      setPasscode(saved);
-      passcodeRef.current = saved;
-      setUnlocked(true);
-    }
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) {
+        setNotLoggedIn(true);
+        setLoadingEvents(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('events')
+        .select('id, title, date')
+        .eq('owner_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) {
+        console.error('Could not load events:', error.message);
+      }
+      setEvents((data as EventRow[]) ?? []);
+      setLoadingEvents(false);
+    });
   }, []);
 
-  // Fetch events on unlock
-  useEffect(() => {
-    if (!unlocked) return;
-    supabase
-      .from('events')
-      .select('id, title, date')
-      .order('created_at', { ascending: false })
-      .limit(50)
-      .then(({ data, error }) => {
-        if (error) {
-          console.error('Could not load events:', error.message);
-          return;
-        }
-        setEvents((data as EventRow[]) ?? []);
-      });
-  }, [unlocked]);
-
-  // Safely stop scanner instance
   const stopScanner = async () => {
     const scanner = scannerRef.current;
     scannerRef.current = null;
@@ -110,7 +98,6 @@ export default function ScanPage() {
     }
   };
 
-  // Teardown on unmount
   useEffect(() => {
     return () => {
       if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
@@ -141,14 +128,6 @@ export default function ScanPage() {
     busyRef.current = false;
   };
 
-  const lockAgain = (msg: string) => {
-    sessionStorage.removeItem('checkin_passcode');
-    stopScanner();
-    setUnlocked(false);
-    setGateError(msg);
-    busyRef.current = false;
-  };
-
   const submitCode = async (raw: string) => {
     const code = raw.trim();
     if (!code || busyRef.current) return;
@@ -169,15 +148,20 @@ export default function ScanPage() {
     try {
       const res = await fetch('/api/checkin', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-checkin-passcode': passcodeRef.current,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, eventId: eventIdRef.current }),
+        credentials: 'include', // send the organizer's session cookie
       });
 
       if (res.status === 401) {
-        lockAgain('Wrong passcode. Try again.');
+        busyRef.current = false;
+        showResult({ status: 'error', message: 'Your session expired. Please log in again.' });
+        return;
+      }
+
+      if (res.status === 403) {
+        busyRef.current = false;
+        showResult({ status: 'error', message: "You don't manage this event." });
         return;
       }
 
@@ -200,7 +184,7 @@ export default function ScanPage() {
 
     try {
       const { Html5Qrcode } = await import('html5-qrcode');
-      
+
       if (scannerRef.current) {
         await stopScanner();
       }
@@ -235,48 +219,17 @@ export default function ScanPage() {
     }
   };
 
-  const handleUnlock = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!passcode.trim()) return;
-    sessionStorage.setItem('checkin_passcode', passcode.trim());
-    passcodeRef.current = passcode.trim();
-    setGateError('');
-    setUnlocked(true);
-  };
-
-  // Passcode Security View
-  if (!unlocked) {
+  if (notLoggedIn) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
-        <form
-          onSubmit={handleUnlock}
-          className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4"
-        >
-          <div>
-            <h1 className="text-lg font-black text-white">Door check-in</h1>
-            <p className="text-xs text-slate-400 mt-1">Enter the organizer passcode to start scanning.</p>
-          </div>
-          <input
-            type="password"
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            placeholder="Passcode"
-            autoFocus
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          {gateError && <p className="text-xs text-red-400 font-semibold">{gateError}</p>}
-          <button
-            type="submit"
-            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm rounded-xl transition"
-          >
-            Unlock scanner
-          </button>
-        </form>
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 text-center">
+        <h1 className="text-xl font-bold mb-2">Not logged in</h1>
+        <Link href="/login?next=/organizer/scan" className="text-indigo-400 font-bold text-sm">
+          Log in
+        </Link>
       </div>
     );
   }
 
-  // Active Scanner View
   const style = result ? RESULT_STYLES[result.status] : null;
 
   return (
@@ -294,73 +247,81 @@ export default function ScanPage() {
           </div>
         </div>
 
-        <div className="space-y-1">
-          <label className="text-[11px] text-slate-400 font-bold">Event</label>
-          <select
-            value={eventId}
-            onChange={(e) => setEventId(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="">Select the event you're scanning for</option>
-            {events.map((ev) => (
-              <option key={ev.id} value={ev.id}>
-                {ev.title}
-                {ev.date ? ` - ${ev.date}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="relative">
-          <div
-            id="qr-reader"
-            className="w-full overflow-hidden rounded-2xl bg-black border border-slate-800 min-h-[280px]"
-          />
-          {!scanning && (
-            <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-xs pointer-events-none">
-              Camera is off
-            </div>
-          )}
-        </div>
-
-        {cameraError && <p className="text-xs text-red-400 font-semibold">{cameraError}</p>}
-
-        <button
-          onClick={scanning ? stopScanner : startScanner}
-          className={`w-full py-3.5 rounded-xl font-bold text-sm transition ${
-            scanning
-              ? 'bg-slate-800 hover:bg-slate-700 text-white'
-              : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30'
-          }`}
-        >
-          {scanning ? 'Stop camera' : 'Start scanning'}
-        </button>
-
-        {/* Manual Code Input Fallback */}
-        <div className="pt-2 space-y-2">
-          <p className="text-[11px] text-slate-400 font-bold">Can't scan? Type the ticket code</p>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={manualCode}
-              onChange={(e) => setManualCode(e.target.value)}
-              placeholder="Ticket code"
-              className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <button
-              onClick={() => {
-                submitCode(manualCode);
-                setManualCode('');
-              }}
-              className="px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm"
-            >
-              Check
-            </button>
+        {loadingEvents ? (
+          <div className="text-center py-12 text-slate-400 text-sm">Loading your events...</div>
+        ) : events.length === 0 ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center text-sm text-slate-400">
+            You don't have any events to scan for yet.
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <label className="text-[11px] text-slate-400 font-bold">Event</label>
+              <select
+                value={eventId}
+                onChange={(e) => setEventId(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Select the event you're scanning for</option>
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.title}
+                    {ev.date ? ` - ${ev.date}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="relative">
+              <div
+                id="qr-reader"
+                className="w-full overflow-hidden rounded-2xl bg-black border border-slate-800 min-h-[280px]"
+              />
+              {!scanning && (
+                <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-xs pointer-events-none">
+                  Camera is off
+                </div>
+              )}
+            </div>
+
+            {cameraError && <p className="text-xs text-red-400 font-semibold">{cameraError}</p>}
+
+            <button
+              onClick={scanning ? stopScanner : startScanner}
+              className={`w-full py-3.5 rounded-xl font-bold text-sm transition ${
+                scanning
+                  ? 'bg-slate-800 hover:bg-slate-700 text-white'
+                  : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30'
+              }`}
+            >
+              {scanning ? 'Stop camera' : 'Start scanning'}
+            </button>
+
+            <div className="pt-2 space-y-2">
+              <p className="text-[11px] text-slate-400 font-bold">Can't scan? Type the ticket code</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualCode}
+                  onChange={(e) => setManualCode(e.target.value)}
+                  placeholder="Ticket code"
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <button
+                  onClick={() => {
+                    submitCode(manualCode);
+                    setManualCode('');
+                  }}
+                  className="px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm"
+                >
+                  Check
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Full-screen Result Modal */}
       {result && style && (
         <button
           onClick={dismissResult}

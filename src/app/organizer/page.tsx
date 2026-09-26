@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
@@ -128,7 +128,7 @@ export default function OrganizerDashboardPage() {
         <div className="bg-slate-900 border border-slate-800 p-3 rounded-2xl space-y-1">
           <span className="text-[9px] font-bold text-slate-400 uppercase block">Revenue</span>
           <p className="text-sm font-black text-emerald-400 truncate">
-            ₦{stats.totalRevenue >= 1000 ? `${(stats.totalRevenue / 1000).toFixed(0)}k` : stats.totalRevenue}
+            â‚¦{stats.totalRevenue >= 1000 ? `${(stats.totalRevenue / 1000).toFixed(0)}k` : stats.totalRevenue}
           </p>
         </div>
 
@@ -187,7 +187,7 @@ export default function OrganizerDashboardPage() {
                       <span className="text-slate-400">
                         {evt.ticketsSold} / {evt.totalCapacity} Tickets Sold
                       </span>
-                      <span className="text-emerald-400">₦{evt.totalRevenue.toLocaleString()}</span>
+                      <span className="text-emerald-400">â‚¦{evt.totalRevenue.toLocaleString()}</span>
                     </div>
                     <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
                       <div
@@ -199,10 +199,10 @@ export default function OrganizerDashboardPage() {
 
                   <div className="flex justify-between items-center pt-1 border-t border-slate-800/60">
                     <Link
-                      href={`/scanner?eventId=${evt.id}`}
+                      href={`/organizer/scan?eventId=${evt.id}`}
                       className="text-[11px] text-indigo-400 hover:underline font-bold flex items-center gap-1"
                     >
-                      📷 Launch Gate Scanner →
+                      ðŸ“· Launch Gate Scanner â†’
                     </Link>
                     <span className="text-[10px] text-slate-500 font-bold">{percentSold}% Sold</span>
                   </div>
@@ -217,9 +217,10 @@ export default function OrganizerDashboardPage() {
 
       <footer className="pt-4 border-t border-slate-800 text-center">
         <Link href="/" className="text-xs text-slate-400 hover:text-white transition font-medium">
-          ← Back to Event Discovery
+          â† Back to Event Discovery
         </Link>
       </footer>
     </main>
   )
 }
+

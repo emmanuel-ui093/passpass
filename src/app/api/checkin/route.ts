@@ -1,6 +1,6 @@
-import crypto from 'crypto';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient as createServiceClient } from '@supabase/supabase-js';
+import { createClient as createServerSupabase } from '@/lib/supabase/server';
 import { Ratelimit } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
 
@@ -31,18 +31,13 @@ const COL = {
 
 const NAME_FIELDS = ['holder_name', 'buyer_name', 'full_name', 'name'];
 
-const supabase = createClient(
+// Service-role client: only used AFTER we've confirmed the caller is a
+// logged-in organizer who owns this event.
+const supabaseAdmin = createServiceClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
   { auth: { persistSession: false } }
 );
-
-function safeEqual(a: string, b: string) {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ab, bb);
-}
 
 function normalizeCode(raw: string): string {
   const text = raw.trim();
@@ -59,7 +54,7 @@ function normalizeCode(raw: string): string {
 }
 
 export async function POST(req: Request) {
-  // 1. Upstash Rate Limiting Guard
+  // 1. Upstash rate limiting guard
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? '127.0.0.1';
   const { success } = await ratelimit.limit(ip);
 
@@ -70,25 +65,20 @@ export async function POST(req: Request) {
     );
   }
 
-  // 2. Passcode Auth Guard
-  const expected = process.env.CHECKIN_PASSCODE;
-  if (!expected || !expected.trim()) {
-    console.error('SERVER ERROR: CHECKIN_PASSCODE environment variable is not set.');
-    return NextResponse.json(
-      { status: 'error', message: 'Server configuration error.' },
-      { status: 500 }
-    );
-  }
+  // 2. Real organizer session — replaces the old shared passcode
+  const supabase = await createServerSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const provided = req.headers.get('x-checkin-passcode') ?? '';
-  if (!safeEqual(provided, expected)) {
+  if (!user) {
     return NextResponse.json(
-      { status: 'unauthorized', message: 'Wrong passcode.' },
+      { status: 'unauthorized', message: 'Please log in as an organizer.' },
       { status: 401 }
     );
   }
 
-  // 3. Payload Validation
+  // 3. Payload validation
   let body: { code?: string; eventId?: string };
   try {
     body = await req.json();
@@ -100,11 +90,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ status: 'error', message: 'Missing code or event ID.' }, { status: 400 });
   }
 
+  // 4. Ownership check — this organizer must actually own this event.
+  // Uses the user's own session (RLS-backed), not the service key, so a
+  // non-owner gets nothing back even if they guess an eventId.
+  const { data: ownedEvent } = await supabase
+    .from('events')
+    .select('id')
+    .eq('id', body.eventId)
+    .eq('owner_id', user.id)
+    .maybeSingle();
+
+  if (!ownedEvent) {
+    return NextResponse.json(
+      { status: 'unauthorized', message: 'You do not manage this event.' },
+      { status: 403 }
+    );
+  }
+
   const code = normalizeCode(body.code);
 
-  // 4. Ticket Lookup & Check-In Execution
+  // 5. Ticket lookup & check-in execution (service role, now that ownership is confirmed)
   try {
-    const { data: ticket, error } = await supabase
+    const { data: ticket, error } = await supabaseAdmin
       .from(TICKETS_TABLE)
       .select('*')
       .eq(COL.code, code)
@@ -141,9 +148,9 @@ export async function POST(req: Request) {
 
     // Atomic update to prevent duplicate check-ins
     const now = new Date().toISOString();
-    const { data: updated, error: updateError } = await supabase
+    const { data: updated, error: updateError } = await supabaseAdmin
       .from(TICKETS_TABLE)
-      .update({ [COL.checkedInAt]: now, [COL.checkedInBy]: 'door-scanner' })
+      .update({ [COL.checkedInAt]: now, [COL.checkedInBy]: user.id })
       .eq('id', ticket.id)
       .is(COL.checkedInAt, null)
       .select('id');
