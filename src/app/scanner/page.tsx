@@ -23,10 +23,10 @@ interface EventRow {
 }
 
 const RESULT_STYLES: Record<ResultStatus, { bg: string; icon: string; title: string }> = {
-  success: { bg: 'bg-emerald-600', icon: '\u2713', title: 'VALID' },
+  success: { bg: 'bg-emerald-600', icon: '✓', title: 'VALID' },
   already_used: { bg: 'bg-amber-500', icon: '!', title: 'ALREADY USED' },
-  invalid: { bg: 'bg-red-600', icon: '\u2715', title: 'INVALID' },
-  wrong_event: { bg: 'bg-red-600', icon: '\u2715', title: 'WRONG EVENT' },
+  invalid: { bg: 'bg-red-600', icon: '✕', title: 'INVALID' },
+  wrong_event: { bg: 'bg-red-600', icon: '✕', title: 'WRONG EVENT' },
   error: { bg: 'bg-slate-700', icon: '!', title: 'ERROR' },
 };
 
@@ -49,21 +49,22 @@ export default function ScanPage() {
   const [manualCode, setManualCode] = useState('');
 
   const scannerRef = useRef<any>(null);
+  const isInitializingRef = useRef(false);
   const busyRef = useRef(false);
   const lastScanRef = useRef<{ code: string; at: number } | null>(null);
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventIdRef = useRef('');
   const passcodeRef = useRef('');
 
-  // Keep refs in sync so the camera callback always sees current values
   useEffect(() => {
     eventIdRef.current = eventId;
   }, [eventId]);
+
   useEffect(() => {
     passcodeRef.current = passcode;
   }, [passcode]);
 
-  // Restore passcode for this browser session
+  // Restore session passcode
   useEffect(() => {
     const saved = sessionStorage.getItem('checkin_passcode');
     if (saved) {
@@ -73,7 +74,7 @@ export default function ScanPage() {
     }
   }, []);
 
-  // Load events (only the columns we need, no banners)
+  // Fetch events on unlock
   useEffect(() => {
     if (!unlocked) return;
     supabase
@@ -90,14 +91,30 @@ export default function ScanPage() {
       });
   }, [unlocked]);
 
-  // Stop camera when leaving the page
+  // Safely stop scanner instance
+  const stopScanner = async () => {
+    const scanner = scannerRef.current;
+    scannerRef.current = null;
+    setScanning(false);
+    isInitializingRef.current = false;
+
+    if (scanner) {
+      try {
+        if (scanner.isScanning) {
+          await scanner.stop();
+        }
+        scanner.clear();
+      } catch (err) {
+        console.warn('Scanner stop warning:', err);
+      }
+    }
+  };
+
+  // Teardown on unmount
   useEffect(() => {
     return () => {
       if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-      const s = scannerRef.current;
-      if (s) {
-        s.stop().then(() => s.clear()).catch(() => {});
-      }
+      stopScanner();
     };
   }, []);
 
@@ -105,10 +122,14 @@ export default function ScanPage() {
     setResult(r);
     if (r.status === 'success') {
       setAdmitted((n) => n + 1);
-      navigator.vibrate?.(120);
+      if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate(120);
+      }
     } else {
       setRejected((n) => n + 1);
-      navigator.vibrate?.([200, 100, 200]);
+      if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate([200, 100, 200]);
+      }
     }
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
     clearTimerRef.current = setTimeout(dismissResult, RESULT_VISIBLE_MS);
@@ -167,17 +188,26 @@ export default function ScanPage() {
         holder: data.holder,
       });
     } catch {
-      lastScanRef.current = null; // allow an immediate retry
+      lastScanRef.current = null;
       showResult({ status: 'error', message: 'Network error. Scan again.' });
     }
   };
 
   const startScanner = async () => {
+    if (isInitializingRef.current || scanning) return;
+    isInitializingRef.current = true;
     setCameraError('');
+
     try {
       const { Html5Qrcode } = await import('html5-qrcode');
+      
+      if (scannerRef.current) {
+        await stopScanner();
+      }
+
       const scanner = new Html5Qrcode('qr-reader');
       scannerRef.current = scanner;
+
       await scanner.start(
         { facingMode: 'environment' },
         {
@@ -192,27 +222,16 @@ export default function ScanPage() {
         },
         () => {}
       );
+
       setScanning(true);
     } catch (err: any) {
-      console.error('Camera error:', err);
+      console.error('Camera startup error:', err);
       scannerRef.current = null;
       setCameraError(
-        'Could not open the camera. Allow camera access in your browser settings, and make sure no other app is using it.'
+        'Could not open the camera. Grant camera permissions in browser settings and ensure no other app is using it.'
       );
-    }
-  };
-
-  const stopScanner = async () => {
-    const s = scannerRef.current;
-    scannerRef.current = null;
-    setScanning(false);
-    if (s) {
-      try {
-        await s.stop();
-        s.clear();
-      } catch {
-        // already stopped
-      }
+    } finally {
+      isInitializingRef.current = false;
     }
   };
 
@@ -225,7 +244,7 @@ export default function ScanPage() {
     setUnlocked(true);
   };
 
-  // ---------- Passcode gate ----------
+  // Passcode Security View
   if (!unlocked) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
@@ -257,7 +276,7 @@ export default function ScanPage() {
     );
   }
 
-  // ---------- Scanner ----------
+  // Active Scanner View
   const style = result ? RESULT_STYLES[result.status] : null;
 
   return (
@@ -317,7 +336,7 @@ export default function ScanPage() {
           {scanning ? 'Stop camera' : 'Start scanning'}
         </button>
 
-        {/* Manual fallback */}
+        {/* Manual Code Input Fallback */}
         <div className="pt-2 space-y-2">
           <p className="text-[11px] text-slate-400 font-bold">Can't scan? Type the ticket code</p>
           <div className="flex gap-2">
@@ -341,7 +360,7 @@ export default function ScanPage() {
         </div>
       </div>
 
-      {/* Full-screen result */}
+      {/* Full-screen Result Modal */}
       {result && style && (
         <button
           onClick={dismissResult}
